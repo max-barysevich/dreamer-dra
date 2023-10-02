@@ -61,7 +61,8 @@ def main():
   with open(config_denoiser_path,'r') as c:
     config_denoiser = json.load(c)
   init_rng = jax.random.PRNGKey(0)
-  module = net.ResNet(num_blocks=3,channels=32)
+  module = net.ResNet(num_blocks=config_denoiser['denoiser']['num_blocks'],
+                      channels=config_denoiser['denoiser']['channels'])
   params = module.init(init_rng,
                       jnp.ones((1,
                                 config_denoiser['img_dim'],
@@ -70,7 +71,7 @@ def main():
                       )['params']
   tx = optax.adamw(0.)
   state = TrainState.create(apply_fn=module.apply,params=params,tx=tx)
-  state = checkpoints.restore_checkpoint(config_denoiser['denoiser'],state,prefix='ckpt_')
+  state = checkpoints.restore_checkpoint(config_denoiser['denoiser']['path'],state,prefix='ckpt_')
 
   @jax.jit
   def denoiser(x):
