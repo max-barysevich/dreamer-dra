@@ -1,0 +1,10 @@
+{
+    "env": "/home/maxbarysevich/fmenv/",
+    "net": "/home/maxbarysevich/DRA/",
+    
+    "logdir": "~/logdir/",
+    "log_every": 30,
+
+    "train_ratio": 4,
+    "batch_size": 2
+}

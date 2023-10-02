@@ -12,14 +12,17 @@ def main():
   import sys
   import os
 
-  current_dir = os.path.dirname(os.path.abspath(__file__))
-  env_path = os.path.join(current_dir,'..','fmenv')
+  with open('config.json','r') as c:
+    config_main = json.load(c)
+  
+  env_path = config_main['env']
   sys.path.append(env_path)
   import env as envs
 
-  rbd_path = os.path.join(current_dir,'..','DRA')
+  rbd_path = config_main['net']
   sys.path.append(rbd_path)
   import net
+
   from flax.training.train_state import TrainState
   from flax.training import checkpoints
   import optax
@@ -32,10 +35,10 @@ def main():
   config = embodied.Config(dreamerv3.configs['defaults'])
   config = config.update(dreamerv3.configs['small'])
   config = config.update({
-      'logdir': '~/logdir/'+logname,
-      'run.train_ratio': 4, # 64
-      'run.log_every': 30,  # Seconds
-      'batch_size': 2, # 16
+      'logdir': config_main['logdir']+logname,
+      'run.train_ratio': config_main['train_ratio'], # 64
+      'run.log_every': config_main['log_every'],  # Seconds
+      'batch_size': config_main['batch_size'], # 16
       'jax.prealloc': False,
       'encoder.mlp_keys': '$^', # check docs
       'decoder.mlp_keys': '$^',
@@ -57,7 +60,7 @@ def main():
   ])
 
   # create denoiser
-  config_denoiser_path = '/home/maxbarysevich/fmenv/config.json'
+  config_denoiser_path = env_path+'config.json'
   with open(config_denoiser_path,'r') as c:
     config_denoiser = json.load(c)
   init_rng = jax.random.PRNGKey(0)
