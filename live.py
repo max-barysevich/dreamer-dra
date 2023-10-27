@@ -102,6 +102,22 @@ class DRA:
         pass
 
     def save(self):
+        
+        with tifffile.TiffWriter(self.file_name,bigtiff=True) as tif:
+
+            while not self.stop_save.value: # maybe also check if queue is empty
+                
+                while self.save_queue.empty():
+                    time.sleep(0.001)
+                
+                save_dict = self.save_queue.get()
+
+                img = save_dict['img']
+                metadata = {'IsReference': save_dict['is_ref']} # create full metadata later
+                # IsReference is retrievable with json.loads(tif.pages[i].tags['ImageDescription'].value)['IsReference']
+
+                tif.write(img,metadata=metadata)
+
         pass
 
     def vis(self):
