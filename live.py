@@ -16,7 +16,7 @@ import platform
 
 import multiprocessing as mp
 
-from pycromanager import Core # move to pymmcoreplus?
+from pymmcore_plus import CMMCorePlus as Core
 
 import dreamerv3
 from dreamerv3 import embodied
@@ -208,15 +208,15 @@ class DRA:
 
         core = Core()
 
-        if core.is_sequence_running():
-            core.stop_sequence_acquisition()
+        if core.isSequenceRunning():
+            core.initializeCircularBuffer()
         
-        core.initialize_circular_buffer()
+        core.initializeCircularBuffer()
 
         if self.trigger_mode != 'external exposure control':
-            core.set_exposure(self.exposure_time)
+            core.setExposure(self.exposure_time)
         
-        core.start_continuous_sequence_acquisition(0)
+        core.startContinuousSequenceAcquisition(0)
 
         return core
     
@@ -240,7 +240,7 @@ class DRA:
         img = self._get_image(core)
 
         # clear buffer
-        core.initialize_circular_buffer()
+        core.initializeCircularBuffer()
 
         # split into 128x128 regions
         _, H, W, _ = img.shape
@@ -293,10 +293,10 @@ class DRA:
     
     def _get_image(self,core):
 
-        while core.get_remaining_image_count() == 0:
+        while core.getRemainingImageCount() == 0:
             time.sleep(0.001)
 
-        img = core.pop_next_tagged_image()
+        img = core.popNextTaggedImage()
         img = np.reshape(img.pix,newshape=[1,img.tags['Height'], img.tags['Width'],1])
 
         return img
@@ -351,9 +351,18 @@ class DRA:
         Stop acquisition and all processes
         '''
         # stop acquisition
-        core.stop_sequence_acquisition()
+        core.initializeCircularBuffer()
 
         # send stop signal to processing, save and vis
         self.stop_agent.value = True
         self.stop_save.value = True
         self.stop_vis.value = True
+
+### Hardware###
+    '''
+    core = Core()
+    core.load_system_configuration(cfg_path)
+
+    core.setProperty('pco_camera','Acquiremode','External')
+    core.setProperty('pco_camera','Triggermode','External')
+    '''
