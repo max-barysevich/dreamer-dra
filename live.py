@@ -146,7 +146,7 @@ class DRA:
 
             outs, state = agent.policy(obs,state=state,mode='eval')
 
-            action = np.argmax(outs['action'][0])
+            action = np.argmax(outs['action'][0]) # action should just be outs['action'], unless resetting
 
             self.action_queue.put(action)
 
@@ -311,7 +311,7 @@ class DRA:
 
         img = img[0,:,:,0]
 
-        self.save_queue.put({'img':img,'is_ref':action==1})
+        self.save_queue.put({'img':img,'is_ref':bool(action==1)})
 
         if self.vis_queue.empty():
             self.vis_queue.put(img)
