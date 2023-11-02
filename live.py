@@ -1,5 +1,5 @@
-import nidaqmx
-import serial
+#import nidaqmx
+from utils.dummy_hardware import DAQ as nidaqmx
 
 import jax
 import jax.numpy as jnp
@@ -16,14 +16,18 @@ import platform
 
 import multiprocessing as mp
 
-from pymmcore_plus import CMMCorePlus as Core
+#from pymmcore_plus import CMMCorePlus as Core # make a fake core for testing
+from utils.dummy_hardware import Core
 
 import dreamerv3
 from dreamerv3 import embodied
+from embodied.envs import from_gym
+
+from utils.env_gen import Env
 
 class DRA:
     def __init__(self):
-        # start_headless
+
         self.tracing_done = mp.Value('b',False)
 
         self.stop_acq = mp.Value('b',False) # probably define outside, make a required arg for init
@@ -32,8 +36,24 @@ class DRA:
         self.stop_save = mp.Value('b',False)
         self.stop_vis = mp.Value('b',False)
 
+        self.obs_queue = mp.Queue()
+        self.action_queue = mp.Queue()
+        self.save_queue = mp.Queue()
+        self.vis_queue = mp.Queue()
+
         self.trigger_channel = 'Dev1/port0/line2' # remove after rewriting Task()s for arbitrary hardware
         self.illumination_channel = 'Dev1/ao1'
+
+        self.file_name = 'test.tif'
+
+        self.exposure_time = 100
+        self.trigger_mode = 'external'
+
+        self.illum_signal_low = .1
+        self.illum_signal_high = 2.
+        self.illum_signal_off = 0.
+
+        self.ckpt = '~/logdir/run20231006T1438/checkpoint.ckpt'
         pass
 
     def setup(self):
@@ -42,11 +62,33 @@ class DRA:
         # override with individual functions, e.g. def set_exposure_time(self,exposure_time)
         pass
 
+    def run(self):
+
+        acquire_process = mp.Process(target=self.acquire)
+        save_process = mp.Process(target=self.save)
+        vis_process = mp.Process(target=self.vis)
+        agent_process = mp.Process(target=self.process)
+
+        debug_stop = mp.Process(target=self.debug_stop)
+
+        processes = [acquire_process,
+                     save_process,
+                     vis_process,
+                     agent_process,
+                     debug_stop]
+        
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join()
+
+    ### Individual processes ###
+
     def acquire(self):
-        # consider pre-setting acquisition via MMCore for speed, adjust illumination through python in effectively a separate thread
+
         core = self._prepare_camera()
 
-        # find ROI for agent
+        # find ROI for agent and acquire first reference
         agent_roi = self._find_roi(core)
 
         # wait until all GPU processing fns have been traced
@@ -78,7 +120,7 @@ class DRA:
                 self._set_illumination(illum_task,action)
                 
                 # snap
-                self.snap(trigger)
+                self.snap(trigger) # this should accept action when exposure time is controlled by the agent
                 '''
                 # It would be nice to process the previous image here,
                 # while the next one is being acquired.
@@ -102,6 +144,8 @@ class DRA:
         pass
 
     def save(self):
+
+        # prepare directory here
         
         with tifffile.TiffWriter(self.file_name,bigtiff=True) as tif:
 
@@ -117,6 +161,7 @@ class DRA:
                 # IsReference is retrievable with json.loads(tif.pages[i].tags['ImageDescription'].value)['IsReference']
 
                 tif.write(img,metadata=metadata)
+                # save full metadata here
 
         pass
 
@@ -125,32 +170,47 @@ class DRA:
         pass
 
     def process(self):
-        # set up the agent
-        agent = self._prepare_agent()
 
-        # create normalisation pre-processing function
-        self._create_normalise_fn()
+        with jax.transfer_guard('allow'):
 
-        # create dummy reference - this way it should always be in the same place in memory
-        self.ref = jnp.zeros((1,128,128,1))
+            # create normalisation pre-processing function
+            self._create_normalise_fn()
 
-        # notify the acquisition thread that tracing is done
-        self.tracing_done.value = True
+            # create dummy reference - this way it should always be in the same place in memory
+            self.ref = jnp.zeros((1,128,128,1))
 
-        # start processing loop
-        state = None
-        while not self.stop_agent.value:
-            
-            # put most recent frame on GPU and wrap it for the agent
-            obs = self._get_obs()
+            # set up the agent
+            agent = self._prepare_agent()
 
-            outs, state = agent.policy(obs,state=state,mode='eval')
+            # notify the acquisition thread that tracing is done
+            self.tracing_done.value = True
 
-            action = np.argmax(outs['action'][0]) # action should just be outs['action'], unless resetting
+            # start processing loop
+            state = None
+            while not self.stop_agent.value:
+                print('In processing loop.')
+                #print(state[0][0]['deter'].shape,state[0][0]['logit'].shape,state[0][0]['stoch'].shape)
+                
+                # put most recent frame on GPU and wrap it for the agent
+                obs = self._get_obs()
 
-            self.action_queue.put(action)
+                outs, state = agent.policy(obs,state,mode='eval')
+                print(state[0][0]['deter'].shape,state[0][0]['logit'].shape,state[0][0]['stoch'].shape)
+
+                action = np.argmax(outs['action'][0])
+
+                self.action_queue.put(action)
 
         pass
+
+    def debug_stop(self):
+        for _ in range(10):
+            print('Running.')
+            time.sleep(5)
+        self.stop_acq.value = True
+        self.stop_agent.value = True
+        self.stop_save.value = True
+        self.stop_vis.value = True
 
     ### Backend ###
 
@@ -171,36 +231,31 @@ class DRA:
             'decoder.cnn_keys': 'obs',
         })
         config = embodied.Flags(config).parse()
-
-        act_space = {'action':embodied.Space(np.float32,shape=(2,),low=0.,high=1.),
-                     'reset':embodied.Space(np.bool,shape=(),low=False,high=True)}
         
-        obs_space = {'obs':embodied.Space(np.float32,shape=(128,128,1),low=0.,high=1.), # TODO: fix dims
-                     'ref':embodied.Space(np.float32,shape=(128,128,1),low=0.,high=1.), # TODO: fix dims
-                     'reward':embodied.Space(np.float32,shape=(),low=-np.inf,high=np.inf),
-                     'is_first':embodied.Space(np.bool,shape=(),low=False,high=True),
-                     'is_last':embodied.Space(np.bool,shape=(),low=False,high=True),
-                     'is_terminal':embodied.Space(np.bool,shape=(),low=False,high=True)}
+        env = Env()
+        env = from_gym.FromGym(env, obs_key='image')
+        env = dreamerv3.wrap_env(env, config)
+        env = embodied.BatchEnv([env],parallel=False)
         
         step = embodied.Counter()
 
-        agent = dreamerv3.Agent(obs_space, act_space, step, config)
+        agent = dreamerv3.Agent(env.obs_space, env.act_space, step, config)
 
         checkpoint = embodied.Checkpoint()
         checkpoint.agent = agent
         checkpoint.load(ckpt, keys=['agent'])
 
-        dummy_input = jnp.ones((1,128,128,1)) # TODO: fix dims
-        dummy_obs = {
-            'obs': dummy_input,
-            'ref': dummy_input,
-            'reward': np.array([0.]),
-            'is_first': np.array([True]),
-            'is_last': np.array([False]),
-            'is_terminal': np.array([False])
+        # make a fake obs and wrap it
+        obs = {
+            'obs':jnp.zeros((1,128,128,1)),
+            'ref':self.ref,
+            'reward':np.array([0.]),
+            'is_first':np.array([True]),
+            'is_last':np.array([False]),
+            'is_terminal':np.array([False])
         }
-
-        _ = agent.policy(dummy_obs,state=None,mode='eval')
+        
+        _ = agent.policy(obs,None,mode='eval')
 
         return agent
 
@@ -209,12 +264,11 @@ class DRA:
         core = Core()
 
         if core.isSequenceRunning():
-            core.initializeCircularBuffer()
+            core.initializeCircularBuffer() # unnecessary
         
         core.initializeCircularBuffer()
 
-        if self.trigger_mode != 'external exposure control':
-            core.setExposure(self.exposure_time)
+        self._create_snap_fn(core)
         
         core.startContinuousSequenceAcquisition(0)
 
@@ -273,9 +327,10 @@ class DRA:
         elif action == -1:
             illum_task.write(self.illum_signal_off)
 
-    def _create_snap_fn(self):
+    def _create_snap_fn(self,core):
 
         if self.trigger_mode == 'external':
+            core.setExposure(self.exposure_time)
             def snap(trigger):
                 trigger.write(True)
                 trigger.write(False)
@@ -307,7 +362,7 @@ class DRA:
         # send dicts of {'obs':img,'is_ref':is_ref} to ensure syncronicity
 
         # send to process
-        self.obs_queue.put({'obs':agent_roi(img),'is_ref':action==1})
+        self.obs_queue.put({'obs':agent_roi(img),'is_ref':bool(action==1)})
 
         img = img[0,:,:,0]
 
@@ -329,6 +384,7 @@ class DRA:
         is_ref = obs_raw['is_ref']
         if is_ref:
             self.ref.at[:].set(obs) # self.ref = obs may be faster
+            #self.ref = obs
         
         obs_wrapped = {
             'obs':obs,
@@ -366,3 +422,8 @@ class DRA:
     core.setProperty('pco_camera','Acquiremode','External')
     core.setProperty('pco_camera','Triggermode','External')
     '''
+
+if __name__ == '__main__':
+    mp.set_start_method('spawn')
+    dra = DRA()
+    dra.run()
