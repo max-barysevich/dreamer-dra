@@ -21,7 +21,7 @@ from utils.dummy_hardware import Core
 
 import dreamerv3
 from dreamerv3 import embodied
-from embodied.envs import from_gym
+from dreamerv3.embodied.envs import from_gym
 
 from utils.env_gen import Env
 
@@ -46,8 +46,8 @@ class DRA:
 
         self.file_name = 'test.tif'
 
-        self.exposure_time = 100
-        self.trigger_mode = 'external'
+        self.exposure_time = 500
+        self.trigger_mode = 'external exposure control'
 
         self.illum_signal_low = .1
         self.illum_signal_high = 2.
@@ -111,9 +111,12 @@ class DRA:
                     start = False
                 else:
                     # wait for action
-                    while self.action_queue.empty():
+                    while self.action_queue.empty() and not self.stop_acq.value:
                         time.sleep(0.001)
-                
+
+                    if self.stop_acq.value:
+                        break
+
                     action = self.action_queue.get()
                 
                 # set illumination
@@ -151,8 +154,12 @@ class DRA:
 
             while not self.stop_save.value: # maybe also check if queue is empty
                 
-                while self.save_queue.empty():
+                while self.save_queue.empty() and not self.stop_save.value:
                     time.sleep(0.001)
+                
+                if self.stop_save.value:
+                    print('Stopping saving.')
+                    break
                 
                 save_dict = self.save_queue.get()
 
@@ -194,6 +201,10 @@ class DRA:
                 # put most recent frame on GPU and wrap it for the agent
                 obs = self._get_obs()
 
+                if obs is None:
+                    print('Stopping agent.')
+                    break
+
                 outs, state = agent.policy(obs,state,mode='eval')
                 print(state[0][0]['deter'].shape,state[0][0]['logit'].shape,state[0][0]['stoch'].shape)
 
@@ -208,9 +219,9 @@ class DRA:
             print('Running.')
             time.sleep(5)
         self.stop_acq.value = True
-        self.stop_agent.value = True
-        self.stop_save.value = True
-        self.stop_vis.value = True
+        #self.stop_agent.value = True
+        #self.stop_save.value = True
+        #self.stop_vis.value = True
 
     ### Backend ###
 
@@ -338,7 +349,7 @@ class DRA:
         elif self.trigger_mode == 'external exposure control':
             def snap(trigger):
                 trigger.write(True)
-                time.sleep(self.exposure_time)
+                time.sleep(self.exposure_time/1000)
                 trigger.write(False)
 
         else:
@@ -373,29 +384,34 @@ class DRA:
     
     def _get_obs(self):
 
-        while self.obs_queue.empty():
+        while self.obs_queue.empty() and not self.stop_agent.value:
             time.sleep(0.001)
         
-        obs_raw = self.obs_queue.get()
-
-        obs = jnp.array(obs_raw['obs'])
-        obs = self.normalise(obs)
-
-        is_ref = obs_raw['is_ref']
-        if is_ref:
-            self.ref.at[:].set(obs) # self.ref = obs may be faster
-            #self.ref = obs
+        if self.stop_agent.value:
+            return None
         
-        obs_wrapped = {
-            'obs':obs,
-            'ref':self.ref,
-            'reward':np.array([0.]),
-            'is_first':np.array([False]),
-            'is_last':np.array([False]),
-            'is_terminal':np.array([False])
-        }
+        else:
+        
+            obs_raw = self.obs_queue.get()
 
-        return obs_wrapped
+            obs = jnp.array(obs_raw['obs'])
+            obs = self.normalise(obs)
+
+            is_ref = obs_raw['is_ref']
+            if is_ref:
+                self.ref.at[:].set(obs) # self.ref = obs may be faster
+                #self.ref = obs
+            
+            obs_wrapped = {
+                'obs':obs,
+                'ref':self.ref,
+                'reward':np.array([0.]),
+                'is_first':np.array([False]),
+                'is_last':np.array([False]),
+                'is_terminal':np.array([False])
+            }
+
+            return obs_wrapped
     
     def _create_normalise_fn(self):
         self.normalise = jax.jit(lambda x: x / x.max())
@@ -406,6 +422,7 @@ class DRA:
         '''
         Stop acquisition and all processes
         '''
+        print('Stopping acquisition.')
         # stop acquisition
         core.initializeCircularBuffer()
 

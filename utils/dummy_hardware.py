@@ -25,7 +25,7 @@ class Core:
 class taggedImage:
 
     def __init__(self):
-        self.pix = np.random.randint(0,2**16,(512*512,))
+        self.pix = np.random.randint(0,2**16,(512*512,)).astype(np.uint16)
         self.tags = {'Height':512,'Width':512}
     
 class Task:
