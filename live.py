@@ -81,6 +81,8 @@ class DRA:
             process.start()
         for process in processes:
             process.join()
+        
+        print('All processes joined.')
 
     ### Individual processes ###
 
@@ -144,7 +146,7 @@ class DRA:
             # stop acquisition
             self._stop(core)
 
-        pass
+        print('Acquisition process stopped.')
 
     def save(self):
 
@@ -169,12 +171,21 @@ class DRA:
 
                 tif.write(img,metadata=metadata)
                 # save full metadata here
-
-        pass
+        
+        print('Saving process stopped.')
 
     def vis(self):
-        # remember to normalize
-        pass
+        while True:
+            while self.vis_queue.empty() and not self.stop_vis.value:
+                time.sleep(0.001)
+            
+            if self.stop_vis.value:
+                print('Stopping vis.')
+                break
+            
+            img = self.vis_queue.get()
+
+        print('Vis process stopped.')
 
     def process(self):
 
@@ -212,7 +223,7 @@ class DRA:
 
                 self.action_queue.put(action)
 
-        pass
+        print('Processing process stopped.')
 
     def debug_stop(self):
         for _ in range(10):
@@ -222,6 +233,7 @@ class DRA:
         #self.stop_agent.value = True
         #self.stop_save.value = True
         #self.stop_vis.value = True
+        print('Debug process stopped.')
 
     ### Backend ###
 
