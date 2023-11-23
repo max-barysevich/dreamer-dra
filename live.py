@@ -443,6 +443,14 @@ class DRA:
         self.stop_save.value = True
         self.stop_vis.value = True
 
+        # wait and empty queues
+        print('Emptying queues in 10 seconds.')
+        time.sleep(10)
+        print('Emptying queues.')
+        for queue in [self.obs_queue,self.action_queue,self.save_queue,self.vis_queue]:
+            while not queue.empty():
+                _ = queue.get()
+
 ### Hardware###
     '''
     core = Core()
