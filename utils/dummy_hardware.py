@@ -21,6 +21,9 @@ class Core:
 
     def popNextTaggedImage(self):
         return taggedImage()
+    
+    def load_system_configuration(self,config):
+        pass
 
 class taggedImage:
 

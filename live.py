@@ -44,6 +44,8 @@ class DRA:
         self.trigger_channel = 'Dev1/port0/line2' # remove after rewriting Task()s for arbitrary hardware
         self.illumination_channel = 'Dev1/ao1'
 
+        self.core_config = 'C:/Program Files/Micro-Manager-2.0gamma/MMConfig_demo.cfg'
+
         self.file_name = 'test.tif'
 
         self.exposure_time = 500
@@ -99,6 +101,7 @@ class DRA:
 
         with (nidaqmx.Task() as trigger,
               nidaqmx.Task() as illum_task): # TODO: rewrite for arbitrary hardware - make separate classes for clarity
+            # e.g. self.hardware.Task()
             
             trigger.do_channels.add_do_chan(self.trigger_channel)
             illum_task.ao_channels.add_ao_voltage_chan(self.illumination_channel)
@@ -285,9 +288,10 @@ class DRA:
     def _prepare_camera(self):
 
         core = Core()
+        core.load_system_configuration(self.core_config)
 
-        if core.isSequenceRunning():
-            core.initializeCircularBuffer() # unnecessary
+        core.setProperty('pco_camera','Acquiremode','External')
+        core.setProperty('pco_camera','Triggermode','External')
         
         core.initializeCircularBuffer()
 
@@ -450,15 +454,6 @@ class DRA:
         for queue in [self.obs_queue,self.action_queue,self.save_queue,self.vis_queue]:
             while not queue.empty():
                 _ = queue.get()
-
-### Hardware###
-    '''
-    core = Core()
-    core.load_system_configuration(cfg_path)
-
-    core.setProperty('pco_camera','Acquiremode','External')
-    core.setProperty('pco_camera','Triggermode','External')
-    '''
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
