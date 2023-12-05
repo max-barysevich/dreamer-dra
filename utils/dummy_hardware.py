@@ -25,6 +25,12 @@ class Core:
     def load_system_configuration(self,config):
         pass
 
+    def getProperty(self,*args):
+        pass
+
+    def setProperty(self,*args):
+        pass
+
 class taggedImage:
 
     def __init__(self):

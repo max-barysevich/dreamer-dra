@@ -73,14 +73,17 @@ class DRA:
 
         debug_stop = mp.Process(target=self.debug_stop)
 
-        self.processes = [acquire_process,
-                          save_process,
-                          vis_process,
-                          agent_process,
-                          debug_stop]
+        processes = [acquire_process,
+                     save_process,
+                     vis_process,
+                     agent_process,
+                     debug_stop]
                 
-        for process in self.processes:
+        for process in processes:
             process.start()
+        
+        for process in processes: # move to stop()
+            process.join()
 
     ### Individual processes ###
 
@@ -450,11 +453,6 @@ class DRA:
         for queue in [self.obs_queue,self.action_queue,self.save_queue,self.vis_queue]:
             while not queue.empty():
                 _ = queue.get()
-        
-        for process in self.processes: # move to stop()
-            process.join()
-        
-        print('All processes joined.')
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
