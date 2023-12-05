@@ -44,7 +44,7 @@ class DRA:
         self.trigger_channel = 'Dev1/port0/line2' # remove after rewriting Task()s for arbitrary hardware
         self.illumination_channel = 'Dev1/ao1'
 
-        self.core_config = 'C:/Program Files/Micro-Manager-2.0gamma/MMConfig_demo.cfg'
+        self.core_config = '/usr/local/ImageJ/MMConfig.cfg'
 
         self.file_name = 'test.tif'
 
@@ -73,18 +73,14 @@ class DRA:
 
         debug_stop = mp.Process(target=self.debug_stop)
 
-        processes = [acquire_process,
-                     save_process,
-                     vis_process,
-                     agent_process,
-                     debug_stop]
-        
-        for process in processes:
+        self.processes = [acquire_process,
+                          save_process,
+                          vis_process,
+                          agent_process,
+                          debug_stop]
+                
+        for process in self.processes:
             process.start()
-        for process in processes:
-            process.join()
-        
-        print('All processes joined.')
 
     ### Individual processes ###
 
@@ -454,6 +450,11 @@ class DRA:
         for queue in [self.obs_queue,self.action_queue,self.save_queue,self.vis_queue]:
             while not queue.empty():
                 _ = queue.get()
+        
+        for process in self.processes: # move to stop()
+            process.join()
+        
+        print('All processes joined.')
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
