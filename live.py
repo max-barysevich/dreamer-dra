@@ -8,6 +8,10 @@ import numpy as np
 import einops
 import tifffile
 
+import napari
+from PyQt5.QtWidgets import QPushButton
+from PyQt5.QtCore import QTimer
+
 import time
 import datetime
 
@@ -15,6 +19,7 @@ import os
 import platform
 
 import multiprocessing as mp
+import threading
 
 #from pymmcore_plus import CMMCorePlus as Core # make a fake core for testing
 from utils.dummy_hardware import Core
@@ -25,21 +30,91 @@ from dreamerv3.embodied.envs import from_gym
 
 from utils.env_gen import Env
 
-class DRA:
+class GUI:
+    # prevent agent reloading if loaded already
+    # problem: the agent is destroyed when the thread is stopped?
     def __init__(self):
 
-        self.tracing_done = mp.Value('b',False)
+        self.viewer = napari.Viewer()
 
-        self.stop_acq = mp.Value('b',False) # probably define outside, make a required arg for init
+        self.vis_queue = mp.Queue()
 
+        self.stop_acq = mp.Value('b',False)
         self.stop_agent = mp.Value('b',False)
         self.stop_save = mp.Value('b',False)
         self.stop_vis = mp.Value('b',False)
 
+        self.backend = DRA(self.stop_acq,
+                           self.stop_agent,
+                           self.stop_save,
+                           self.stop_vis,
+                           self.vis_queue)
+
+        self.start_button = QPushButton('Start')
+        self.viewer.window.add_dock_widget(self.start_button)
+
+        self.stop_button = QPushButton('Stop')
+        self.viewer.window.add_dock_widget(self.stop_button)
+
+        self.start_button.clicked.connect(self._start_backend)
+        self.stop_button.clicked.connect(self._stop_backend)
+
+        self.timer = QTimer()
+        self.timer.setInterval(20)
+        self.timer.timeout.connect(self.update_gui)
+        self.timer.start()
+
+        self.layer = None
+
+    def update_gui(self):
+        if not self.vis_queue.empty():
+            img = self.vis_queue.get()
+            if self.layer is None or len(self.viewer.layers) == 0:
+                self.layer = self.viewer.add_image(img,name='DRA')
+            else:
+                self.layer.data = img
+            
+            if not self.vis_queue.empty():
+                while not self.vis_queue.empty():
+                    _ = self.vis_queue.get()
+    
+    def _start_backend(self):
+        self.stop_acq.value = False
+        self.stop_agent.value = False
+        self.stop_save.value = False
+        self.stop_vis.value = False
+
+        self.backend_thread = threading.Thread(target=self.backend.run)
+        self.backend_thread.start()
+    
+    def _stop_backend(self):
+        self.stop_acq.value = True
+        print('Attempting to join backend thread in 20 seconds.')
+        time.sleep(20)
+        self.backend_thread.join()
+        print('Backend thread joined.')
+
+class DRA:
+    def __init__(self,
+                 stop_acq,
+                 stop_agent,
+                 stop_save,
+                 stop_vis,
+                 vis_queue):
+
+        self.tracing_done = mp.Value('b',False)
+
+        #self.stop_acq = mp.Value('b',False) # probably define outside, make a required arg for init
+        self.stop_acq = stop_acq
+        self.stop_agent = stop_agent
+        self.stop_save = stop_save
+        self.stop_vis = stop_vis
+
         self.obs_queue = mp.Queue()
         self.action_queue = mp.Queue()
         self.save_queue = mp.Queue()
-        self.vis_queue = mp.Queue()
+
+        self.vis_queue = vis_queue
 
         self.trigger_channel = 'Dev1/port0/line2' # remove after rewriting Task()s for arbitrary hardware
         self.illumination_channel = 'Dev1/ao1'
@@ -68,23 +143,26 @@ class DRA:
 
         acquire_process = mp.Process(target=self.acquire)
         save_process = mp.Process(target=self.save)
-        vis_process = mp.Process(target=self.vis)
+        #vis_process = mp.Process(target=self.vis)
         agent_process = mp.Process(target=self.process)
 
-        debug_stop = mp.Process(target=self.debug_stop)
+        #debug_stop = mp.Process(target=self.debug_stop)
 
-        processes = [acquire_process,
-                     save_process,
-                     vis_process,
-                     agent_process,
-                     debug_stop]
+        processes = [
+            acquire_process,
+            save_process,
+            agent_process,
+            #debug_stop
+        ]
                 
         for process in processes:
             process.start()
         
-        for process in processes: # move to stop()
+        for process in processes:
             process.join()
-
+        
+        print('All processes joined.')
+        
     ### Individual processes ###
 
     def acquire(self):
@@ -176,19 +254,6 @@ class DRA:
         
         print('Saving process stopped.')
 
-    def vis(self):
-        while True:
-            while self.vis_queue.empty() and not self.stop_vis.value:
-                time.sleep(0.001)
-            
-            if self.stop_vis.value:
-                print('Stopping vis.')
-                break
-            
-            img = self.vis_queue.get()
-
-        print('Vis process stopped.')
-
     def process(self):
 
         with jax.transfer_guard('allow'):
@@ -200,10 +265,12 @@ class DRA:
             self.ref = jnp.zeros((1,128,128,1))
 
             # set up the agent
-            agent = self._prepare_agent()
+            self.agent = self._prepare_agent()
 
             # notify the acquisition thread that tracing is done
             self.tracing_done.value = True
+
+            # none of the above needs to be done after GUI has run acquisition for the first time
 
             # start processing loop
             state = None
@@ -218,7 +285,7 @@ class DRA:
                     print('Stopping agent.')
                     break
 
-                outs, state = agent.policy(obs,state,mode='eval')
+                outs, state = self.agent.policy(obs,state,mode='eval')
                 print(state[0][0]['deter'].shape,state[0][0]['logit'].shape,state[0][0]['stoch'].shape)
 
                 action = np.argmax(outs['action'][0])
@@ -447,8 +514,8 @@ class DRA:
         self.stop_vis.value = True
 
         # wait and empty queues
-        print('Emptying queues in 10 seconds.')
-        time.sleep(10)
+        print('Emptying queues in 5 seconds.')
+        time.sleep(5)
         print('Emptying queues.')
         for queue in [self.obs_queue,self.action_queue,self.save_queue,self.vis_queue]:
             while not queue.empty():
@@ -456,5 +523,5 @@ class DRA:
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
-    dra = DRA()
-    dra.run()
+    gui = GUI()
+    napari.run()
