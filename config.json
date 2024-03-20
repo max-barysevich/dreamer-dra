@@ -2,9 +2,26 @@
     "env": "/home/maxbarysevich/fmenv/",
     "net": "/home/maxbarysevich/DRA/",
     
-    "logdir": "~/logdir/",
+    "logdir": "/home/maxbarysevich/logdir/",
+    "resume": null,
     "log_every": 30,
+    "steps": 3e4,
 
+    "model": "small",
     "train_ratio": 4,
-    "batch_size": 2
+    
+    "enc_cnn_blocks": 2,
+    "dec_cnn_blocks": 2,
+    "lr": 1e-3,
+    "loss_sca_img": 1e-7,
+    "loss_sca_vec": 1e-7,
+    "loss_sca_rew": 1.0,
+    "loss_sca_cont": 0.01,
+    "loss_sca_dyn": 1.0,
+    "loss_sca_rep": 0.05,
+
+    "batch_size": 2,
+    "batch_length": 64,
+    "envs": 4,
+    "imag_horizon": 15
 }

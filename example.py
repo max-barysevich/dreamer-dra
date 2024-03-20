@@ -1,4 +1,8 @@
 def main():
+  import os
+  os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+  import shutil
+
   import jax
   import jax.numpy as jnp
   import warnings
@@ -10,7 +14,6 @@ def main():
   # import envs
   import json
   import sys
-  import os
 
   with open('config.json','r') as c:
     config_main = json.load(c)
@@ -29,7 +32,16 @@ def main():
 
   warnings.filterwarnings('ignore', '.*truncated to dtype int32.*')
 
-  logname = datetime.datetime.now().strftime('run%Y%m%dT%H%M')
+  if config_main['resume'] is None:
+      logname = datetime.datetime.now().strftime('run%Y%m%dT%H%M')
+  else:
+      logname = config_main['resume']
+
+  if not os.path.exists(config_main['logdir']+logname):
+      os.mkdir(config_main['logdir']+logname)
+
+  shutil.copy('config.json',config_main['logdir']+logname+f'/config_{logname}.json')
+  shutil.copy(env_path+'config.json',config_main['logdir']+logname+f'/env_config_{logname}.json')
 
   # See configs.yaml for all options.
   config = embodied.Config(dreamerv3.configs['defaults'])
@@ -38,14 +50,33 @@ def main():
       'logdir': config_main['logdir']+logname,
       'run.train_ratio': config_main['train_ratio'], # 64
       'run.log_every': config_main['log_every'],  # Seconds
+
+      'run.steps': config_main['steps'], # 1e6
+      'envs.amount': config_main['envs'], # 1
       'batch_size': config_main['batch_size'], # 16
+      'batch_length': config_main['batch_length'], # 64
+
       'jax.prealloc': False,
+      'jax.precision': 'bfloat16',
+
+      'imag_horizon': config_main['imag_horizon'], # 15
+
       'encoder.mlp_keys': '$^', # check docs
       'decoder.mlp_keys': '$^',
-      'encoder.cnn_keys': 'image', # image and ref
-      'decoder.cnn_keys': 'image', # image only
+      'encoder.cnn_keys': ['obs','ref'], # image and ref
+      'decoder.cnn_keys': 'obs', # image only
+      'encoder.cnn_blocks': config_main['enc_cnn_blocks'],
+      'decoder.cnn_blocks': config_main['dec_cnn_blocks'],
       #'wrapper.length': 100,
       #'jax.platform': 'cpu',
+
+      'model_opt.lr': config_main['lr'],
+      'loss_scales.image': config_main['loss_sca_img'],
+      'loss_scales.vector': config_main['loss_sca_vec'],
+      'loss_scales.reward': config_main['loss_sca_rew'],
+      'loss_scales.cont': config_main['loss_sca_cont'],
+      'loss_scales.dyn': config_main['loss_sca_dyn'],
+      'loss_scales.rep': config_main['loss_sca_rep']
   })
   config = embodied.Flags(config).parse()
 
@@ -87,7 +118,9 @@ def main():
   from embodied.envs import from_gym
   #cpu = jax.devices('cpu')[0]
   #with jax.default_device(cpu):
-  env = envs.DenoiserEnv(config_denoiser_path,denoiser)  # Replace this with your Gym env.
+  #env = envs.DenoiserEnv(config_denoiser_path,denoiser)  # Replace this with your Gym env.
+  env = envs.DenoiserSparseContISERewardEnv(config_denoiser_path,denoiser)
+  #env = envs.RBDEnv(config_denoiser_path)
   env = from_gym.FromGym(env, obs_key='image')  # Or obs_key='vector'.
   env = dreamerv3.wrap_env(env, config)
   env = embodied.BatchEnv([env], parallel=False)
