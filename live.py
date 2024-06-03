@@ -3,6 +3,7 @@ from utils.dummy_hardware import DAQ as nidaqmx
 
 import jax
 import jax.numpy as jnp
+from flax.training import checkpoints
 
 import numpy as np
 import einops
@@ -13,17 +14,14 @@ import datetime
 
 import os
 import platform
+import json
 
 import multiprocessing as mp
 
 #from pymmcore_plus import CMMCorePlus as Core # make a fake core for testing
 from utils.dummy_hardware import Core
 
-import dreamerv3
-from dreamerv3 import embodied
-from dreamerv3.embodied.envs import from_gym
-
-from utils.env_gen import Env
+from DRA import net
 
 class DRA:
     def __init__(self,
@@ -61,7 +59,9 @@ class DRA:
         self.illum_signal_high = 2.
         self.illum_signal_off = 0.
 
-        self.ckpt = '~/logdir/run20231006T1438/checkpoint.ckpt'
+        self.ckpt = '/home/maxbarysevich/DRA/logs_iqa/run20240517T1725/ckpt_48/checkpoint'
+        with open('./config.json','r') as f:
+            self.config = json.load(f)
         pass
 
     def setup(self):
@@ -188,7 +188,7 @@ class DRA:
             # create normalisation pre-processing function
             self._create_normalise_fn()
 
-            # create dummy reference - this way it should always be in the same place in memory
+            # create dummy reference - this way it should always be in the same place in memory?
             self.ref = jnp.zeros((1,128,128,1))
 
             # set up the agent
@@ -213,10 +213,11 @@ class DRA:
                     print('Stopping agent.')
                     break
 
-                outs, state = self.agent.policy(obs,state,mode='eval')
-                print(state[0][0]['deter'].shape,state[0][0]['logit'].shape,state[0][0]['stoch'].shape)
+                #outs, state = self.agent.policy(obs,state,mode='eval')
+                #print(state[0][0]['deter'].shape,state[0][0]['logit'].shape,state[0][0]['stoch'].shape)
+                #action = np.argmax(outs['action'][0])
 
-                action = np.argmax(outs['action'][0])
+                action = self.agent(obs)
 
                 self.action_queue.put(action)
 
@@ -226,46 +227,44 @@ class DRA:
 
     def _prepare_agent(self):
 
-        # load and trace agent
+        rng = jax.random.PRNGKey(self.config['prng_key'])
 
-        ckpt = self.ckpt
-
-        config = embodied.Config(dreamerv3.configs['defaults'])
-        config = config.update(dreamerv3.configs['small'])
-        config = config.update({
-            'logdir': '/dev/null' if platform.system()=='Linux' else 'NUL',
-            'batch_size': 1,
-            # turn off jax preallocation to avoid OOM by napari? or allocate less than the default
-            # check precision - switch to bfloat16 if possible
-            'encoder.cnn_keys': ['obs','ref'],
-            'decoder.cnn_keys': 'obs',
-        })
-        config = embodied.Flags(config).parse()
+        module = net.IQAUformer(img_dim=self.config['img_dim'],
+                                img_ch=1,
+                                out_ch=1,
+                                proj_dim=self.config['model']['proj_dim'],
+                                proj_kernel=3,
+                                patch_dim=self.config['model']['patch_dim'],
+                                attn_heads=self.config['model']['attn_heads'],
+                                attn_dim=self.config['model']['attn_dim'],
+                                dropout_rate=self.config['model']['dropout_rate'],
+                                leff_filters=self.config['model']['leff_filters'],
+                                blocks=self.config['model']['blocks'],
+                                mlp_dim=self.config['model']['mlp_dim'])
         
-        env = Env()
-        env = from_gym.FromGym(env, obs_key='image')
-        env = dreamerv3.wrap_env(env, config)
-        env = embodied.BatchEnv([env],parallel=False)
+        variables = module.init(rng,
+                                (jnp.ones((1,self.config['img_dim'],self.config['img_dim'],1)),
+                                 jnp.ones((1,self.config['img_dim'],self.config['img_dim'],1))),
+                                 training=False
+                                )
+
+        params = checkpoints.restore_checkpoint(ckpt_dir=self.config['model']['ckpt'],
+                                                target=None)
         
-        step = embodied.Counter()
-
-        agent = dreamerv3.Agent(env.obs_space, env.act_space, step, config)
-
-        checkpoint = embodied.Checkpoint()
-        checkpoint.agent = agent
-        checkpoint.load(ckpt, keys=['agent'])
-
-        # make a fake obs and wrap it
-        obs = {
-            'obs':jnp.zeros((1,128,128,1)),
-            'ref':self.ref,
-            'reward':np.array([0.]),
-            'is_first':np.array([True]),
-            'is_last':np.array([False]),
-            'is_terminal':np.array([False])
-        }
+        @jax.jit
+        def agent(obs):
+            q = module.apply({'params':params,
+                              'rpi':variables['rpi'],
+                              'shift_attn_mask':variables['shift_attn_mask']},
+                              (obs['ref'],obs['obs']),
+                              training=False)
+            # if q < threshold, return 1, else 0
+            action = jax.lax.cond(q < self.config['q_threshold'],
+                                  lambda: 1,
+                                  lambda: 0)
+            return action
         
-        _ = agent.policy(obs,None,mode='eval')
+        _ = agent(jnp.ones((1,self.config['img_dim'],self.config['img_dim'],1)))
 
         return agent
 
