@@ -1,27 +1,27 @@
 {
-    "env": "/home/maxbarysevich/fmenv/",
-    "net": "/home/maxbarysevich/DRA/",
-    
-    "logdir": "/home/maxbarysevich/logdir/",
-    "resume": null,
-    "log_every": 30,
-    "steps": 3e4,
+    "prng_key:": 0,
 
-    "model": "small",
-    "train_ratio": 4,
-    
-    "enc_cnn_blocks": 2,
-    "dec_cnn_blocks": 2,
-    "lr": 1e-3,
-    "loss_sca_img": 1e-7,
-    "loss_sca_vec": 1e-7,
-    "loss_sca_rew": 1.0,
-    "loss_sca_cont": 0.01,
-    "loss_sca_dyn": 1.0,
-    "loss_sca_rep": 0.05,
+    "camera": {
+        "trigger_channel": "Dev1/port0/line2",
+        "illumination_channel": "Dev1/ao1",
+        "core_config": "/usr/local/ImageJ/MMConfig.cfg",
+        "exposure_time": 100,
+        "trigger_mode": "external"
+    },
 
-    "batch_size": 2,
-    "batch_length": 64,
-    "envs": 4,
-    "imag_horizon": 15
+    "model": {
+        "proj_dim":32,
+        "patch_dim": 8,
+        "attn_heads": [2,4,8],
+        "attn_dim": 32,
+        "dropout_rate": 0.1,
+        "leff_filters": 32,
+        "blocks":[2,2,2],
+        "mlp_dim": 256,
+        "ckpt": "/home/maxbarysevich/DRA/logs_iqa/run20240517T1725/ckpt_48/checkpoint"
+    },
+
+    "q_threshold": 0.7,
+    "img_dim": 128,
+    "save_dir": "test.tif"
 }
