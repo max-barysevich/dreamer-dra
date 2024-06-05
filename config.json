@@ -1,6 +1,36 @@
 {
     "prng_key:": 0,
 
+    "imports": {
+        "env": "/home/maxbarysevich/fmenv/",
+        "net": "/home/maxbarysevich/DRA/"
+    },
+
+    "training": {
+        "logdir": "/home/maxbarysevich/dreamer-dra/logs/",
+        "resume": null,
+        "train_ratio": 16,
+        "log_every": 300,
+        "steps": 1e8,
+        "envs": 1,
+        "batch_size": 4,
+        "batch_length": 256,
+        "imag_horizon": 15,
+
+        "enc_cnn_blocks": 2,
+        "dec_cnn_blocks": 2,
+
+        "lr": 1e-4,
+        "loss_sca_img": 1.0,
+        "loss_sca_vec": 1.0,
+        "loss_sca_rew": 1.0,
+        "loss_sca_cont": 1.0,
+        "loss_sca_dyn": 1.0,
+        "loss_sca_rep": 0.05,
+
+        "comments": null
+    },
+
     "camera": {
         "trigger_channel": "Dev1/port0/line2",
         "illumination_channel": "Dev1/ao1",
