@@ -18,11 +18,11 @@ def main():
   with open('config.json','r') as c:
     config_main = json.load(c)
   
-  env_path = config_main['env']
+  env_path = config_main['imports']['env']
   sys.path.append(env_path)
   import env as envs
 
-  rbd_path = config_main['net']
+  rbd_path = config_main['imports']['net']
   sys.path.append(rbd_path)
   import net
 
@@ -32,51 +32,50 @@ def main():
 
   warnings.filterwarnings('ignore', '.*truncated to dtype int32.*')
 
-  if config_main['resume'] is None:
+  if config_main['training']['resume'] is None:
       logname = datetime.datetime.now().strftime('run%Y%m%dT%H%M')
   else:
-      logname = config_main['resume']
+      logname = config_main['training']['resume']
 
-  if not os.path.exists(config_main['logdir']+logname):
-      os.mkdir(config_main['logdir']+logname)
+  if not os.path.exists(config_main['training']['logdir']+logname):
+      os.mkdir(config_main['training']['logdir']+logname)
 
-  shutil.copy('config.json',config_main['logdir']+logname+f'/config_{logname}.json')
-  shutil.copy(env_path+'config.json',config_main['logdir']+logname+f'/env_config_{logname}.json')
+  shutil.copy('config.json',config_main['training']['logdir']+logname+f'/config_{logname}.json')
+  shutil.copy(env_path+'config.json',config_main['training']['logdir']+logname+f'/env_config_{logname}.json')
 
   # See configs.yaml for all options.
   config = embodied.Config(dreamerv3.configs['defaults'])
   config = config.update(dreamerv3.configs['small'])
   config = config.update({
-      'logdir': config_main['logdir']+logname,
-      'run.train_ratio': config_main['train_ratio'], # 64
-      'run.log_every': config_main['log_every'],  # Seconds
+      'logdir': config_main['training']['logdir']+logname,
+      'run.train_ratio': config_main['training']['train_ratio'], # 64
+      'run.log_every': config_main['training']['log_every'],  # Seconds
 
-      'run.steps': config_main['steps'], # 1e6
-      'envs.amount': config_main['envs'], # 1
-      'batch_size': config_main['batch_size'], # 16
-      'batch_length': config_main['batch_length'], # 64
+      'run.steps': config_main['training']['steps'], # 1e6
+      'envs.amount': config_main['training']['envs'], # 1
+      'batch_size': config_main['training']['batch_size'], # 16
+      'batch_length': config_main['training']['batch_length'], # 64
 
       'jax.prealloc': False,
       'jax.precision': 'bfloat16',
 
-      'imag_horizon': config_main['imag_horizon'], # 15
+      'imag_horizon': config_main['training']['imag_horizon'], # 15
 
       'encoder.mlp_keys': '$^', # check docs
       'decoder.mlp_keys': '$^',
       'encoder.cnn_keys': ['obs','ref'], # image and ref
       'decoder.cnn_keys': 'obs', # image only
-      'encoder.cnn_blocks': config_main['enc_cnn_blocks'],
-      'decoder.cnn_blocks': config_main['dec_cnn_blocks'],
+      'encoder.cnn_blocks': config_main['training']['enc_cnn_blocks'],
+      'decoder.cnn_blocks': config_main['training']['dec_cnn_blocks'],
       #'wrapper.length': 100,
       #'jax.platform': 'cpu',
-
-      'model_opt.lr': config_main['lr'],
-      'loss_scales.image': config_main['loss_sca_img'],
-      'loss_scales.vector': config_main['loss_sca_vec'],
-      'loss_scales.reward': config_main['loss_sca_rew'],
-      'loss_scales.cont': config_main['loss_sca_cont'],
-      'loss_scales.dyn': config_main['loss_sca_dyn'],
-      'loss_scales.rep': config_main['loss_sca_rep']
+      'model_opt.lr': config_main['training']['lr'],
+      'loss_scales.image': config_main['training']['loss_sca_img'],
+      'loss_scales.vector': config_main['training']['loss_sca_vec'],
+      'loss_scales.reward': config_main['training']['loss_sca_rew'],
+      'loss_scales.cont': config_main['training']['loss_sca_cont'],
+      'loss_scales.dyn': config_main['training']['loss_sca_dyn'],
+      'loss_scales.rep': config_main['training']['loss_sca_rep']
   })
   config = embodied.Flags(config).parse()
 
@@ -91,27 +90,41 @@ def main():
   ])
 
   # create denoiser
-  config_denoiser_path = env_path+'config.json'
+
+  def create_denoiser_state(config,rng):
+     module = net.Uformer(img_dim=config['img_dim'],
+                         img_ch=1,
+                         out_ch=1,
+                         proj_dim=config['denoiser']['proj_dim'],
+                         proj_kernel=3,
+                         patch_dim=config['denoiser']['patch_dim'],
+                         attn_heads=config['denoiser']['attn_heads'],
+                         attn_dim=config['denoiser']['attn_dim'],
+                         dropout_rate=config['denoiser']['dropout_rate'],
+                         leff_filters=config['denoiser']['leff_filters'],
+                         blocks=config['denoiser']['blocks'])
+     variables = module.init(rng,
+                            (jnp.ones((1,config['img_dim'],config['img_dim'],1)),
+                             jnp.ones((1,config['img_dim'],config['img_dim'],1)))
+                            )
+     return module, variables
+
+  config_denoiser_path = env_path + 'config.json'
   with open(config_denoiser_path,'r') as c:
     config_denoiser = json.load(c)
   init_rng = jax.random.PRNGKey(0)
-  module = net.ResNet(num_blocks=config_denoiser['denoiser']['num_blocks'],
-                      channels=config_denoiser['denoiser']['channels'])
-  params = module.init(init_rng,
-                      jnp.ones((1,
-                                config_denoiser['img_dim'],
-                                config_denoiser['img_dim'],
-                                1))
-                      )['params']
-  tx = optax.adamw(0.)
-  state = TrainState.create(apply_fn=module.apply,params=params,tx=tx)
-  state = checkpoints.restore_checkpoint(config_denoiser['denoiser']['path'],state,prefix='ckpt_')
+  denoiser_module, variables = create_denoiser_state(config_denoiser,init_rng)
+  state = checkpoints.restore_checkpoint(config_denoiser['denoiser']['path'],
+                                         target=None)
 
   @jax.jit
   def denoiser(x):
       ref = jnp.expand_dims(x[0],axis=0)
       imn = jnp.expand_dims(x[1],axis=0)
-      y = state.apply_fn({'params': state.params},[ref,imn])[0]
+      y = denoiser_module.apply({'params':state['params'],
+                                 'rpi':variables['rpi'],
+                                 'shift_attn_mask':variables['shift_attn_mask']},
+                                 [ref,imn])[0]
       return y
 
   #import crafter
